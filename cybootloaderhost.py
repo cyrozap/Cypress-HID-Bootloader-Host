@@ -52,6 +52,13 @@ class Bootloader():
         self.bootloader_revision = None
 
     def _checksum(self, data):
+        '''16-bit packet checksum.
+
+        :param data: The data to sum
+        :type data: bytes or list of 8-bit integers
+        :returns: checksum
+        :rtype: int
+        '''
         checksum = 0
         for byte in data:
             checksum += byte
@@ -59,6 +66,15 @@ class Bootloader():
         return checksum
 
     def _make_packet(self, command, data=[]):
+        '''Generates a packet to send the bootloader.
+
+        :param command: The command to send
+        :type command: 8-bit int
+        :param data: The data to send
+        :type data: bytes or list of 8-bit integers
+        :returns: Packet data
+        :rtype: list of 8-bit integers
+        '''
         packet = []
         packet.append(0x01)
 
@@ -80,6 +96,13 @@ class Bootloader():
         return packet
 
     def _parse_response(self, response_data):
+        '''Parses the bootloader's response.
+
+        :param response_data: The response_data to parse
+        :type response_data: list of 8-bit integers
+        :returns: Response data
+        :rtype: dict
+        '''
         response = {
             "status": "BOOTLOADER_ERR_UNK",
             "data": [],
@@ -107,6 +130,15 @@ class Bootloader():
         return response
 
     def send_command(self, command, data=[]):
+        '''Sends a command with data to the bootloader.
+
+        :param command: The command to send
+        :type command: 8-bit int
+        :param data: The data to send
+        :type data: bytes or list of 8-bit integers
+        :returns: Response data
+        :rtype: dict
+        '''
         packet = self._make_packet(command, data)
         self._device.write(packet)
 
@@ -115,6 +147,11 @@ class Bootloader():
         return response
 
     def enter_bootloader(self):
+        '''Sends the "Enter Bootloader" command.
+
+        :returns: Success/failure
+        :rtype: bool
+        '''
         response = self.send_command(0x38)
         if response["checksum_ok"] and response["status"] == "CYRET_SUCCESS":
             self.jtag_id = response["data"][0]
@@ -128,6 +165,17 @@ class Bootloader():
             return False
 
     def program_row(self, array_id, row_number, data):
+        '''Programs a row of flash.
+
+        :param array_id: The array_id of the row to program
+        :type array_id: 8-bit int
+        :param row_number: The row_number of the row to program
+        :type row_number: 16-bit int
+        :param data: The data to program
+        :type data: bytes or list of 8-bit integers
+        :returns: Success/failure
+        :rtype: bool
+        '''
         arguments = [array_id, (row_number & 0xff), (row_number >> 8)]
         response = self.send_command(0x39, arguments + data)
         if response["checksum_ok"] and response["status"] == "CYRET_SUCCESS":
@@ -136,6 +184,15 @@ class Bootloader():
             return False
 
     def erase_row(self, array_id, row_number):
+        '''Erases a row of flash.
+
+        :param array_id: The array_id of the row to erase
+        :type array_id: 8-bit int
+        :param row_number: The row_number of the row to erase
+        :type row_number: 16-bit int
+        :returns: Success/failure
+        :rtype: bool
+        '''
         arguments = [array_id, (row_number & 0xff), (row_number >> 8)]
         response = self.send_command(0x34, arguments)
         if response["checksum_ok"] and response["status"] == "CYRET_SUCCESS":
@@ -144,6 +201,13 @@ class Bootloader():
             return False
 
     def send_data(self, data):
+        '''Sends data to the bootloader to be used by another command.
+
+        :param data: The data to send
+        :type data: bytes or list of 8-bit integers
+        :returns: Success/failure
+        :rtype: bool
+        '''
         response = self.send_command(0x37, data)
         if response["checksum_ok"] and response["status"] == "CYRET_SUCCESS":
             return True
@@ -151,6 +215,7 @@ class Bootloader():
             return False
 
     def exit_bootloader(self):
+        '''Sends the "Exit Bootloader" command.'''
         packet = self._make_packet(0x3b, [])
         self._device.write(packet)
 
@@ -183,6 +248,13 @@ class Cyacd():
         self.firmware = None
 
     def _checksum(self, data):
+        '''Single-byte flash row checksum.
+
+        :param data: The data to sum
+        :type data: bytes or list of 8-bit integers
+        :returns: checksum
+        :rtype: int
+        '''
         checksum = 0
         for byte in data:
             checksum += byte
@@ -190,6 +262,9 @@ class Cyacd():
         return checksum
 
     def parse(self):
+        '''Read's the firmware into a list of (array_id, row_number, data)
+        tuples.
+        '''
         lines = self.file.readlines()
 
         header_line = lines.pop(0).rstrip('\r\n')
@@ -217,8 +292,8 @@ class Cyacd():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("vid_pid_string", type=str)
-    parser.add_argument("firmware_file", type=str)
+    parser.add_argument("vid_pid_string", type=str, help="This is the same VID:PID string lsusb outputs. Example: 04b4:f13b")
+    parser.add_argument("firmware_file", type=str, help="The name of the *.cyacd file you want to flash.")
     args = vars(parser.parse_args())
 
     vid_pid_string = args["vid_pid_string"].split(':')
@@ -226,6 +301,7 @@ def main():
     vid = int(vid_pid_string[0], 16)
     pid = int(vid_pid_string[1], 16)
 
+    # Search for a device with matching identifiers
     found = False
     for enumerated in hid.enumerate():
         if enumerated["vendor_id"] == vid and enumerated["product_id"] == pid:
@@ -233,12 +309,15 @@ def main():
             break
 
     if found:
+        # Connect to the device's bootloader
         bootloader = Bootloader(vid, pid)
         bootloader.enter_bootloader()
 
+        # Load the firmware file
         firmware = Cyacd(open(args["firmware_file"], 'r'))
         firmware.parse()
 
+        # Make sure the firmware is being flashed to the correct chip
         if (bootloader.jtag_id == firmware.silicon_id) and (bootloader.device_revision == firmware.silicon_revision):
             bootloader.flash(firmware)
 
